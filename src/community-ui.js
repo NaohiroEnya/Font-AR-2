@@ -15,13 +15,48 @@ export const showToast = (message) => {
   toastTimer = setTimeout(() => { el.hidden = true }, 2600)
 }
 
-// Opens the share sheet where the browser has one, otherwise copies the link.
+// Copies text to the clipboard; resolves true if it worked. Falls back to the old select-and-copy
+// route where the async clipboard isn't available, and returns false if nothing worked.
+export const copyText = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch (error) {
+    const box = document.createElement('textarea')
+    box.value = text
+    box.setAttribute('readonly', '')
+    box.style.cssText = 'position:fixed;top:0;left:0;opacity:0'
+    document.body.appendChild(box)
+    box.select()
+    box.setSelectionRange(0, text.length)
+    let ok = false
+    try {
+      ok = document.execCommand('copy')
+    } catch (copyError) {
+      ok = false
+    }
+    box.remove()
+    return ok
+  }
+}
+
+export const copyCourseUrl = async (course) => {
+  const url = buildCourseUrl(course)
+  if (await copyText(url)) {
+    showToast('コースのURLをコピーしました')
+  } else {
+    window.prompt('このURLをコピーしてください', url)
+  }
+}
+
+// Opens the share sheet where the browser has one, otherwise copies the link. The link goes inside
+// the shared text rather than in the separate `url` field: with both, some share sheets' "Copy"
+// (iOS in particular) copy the text and drop the link, which is the one thing that matters here.
 export const shareCourse = async (course) => {
   const url = buildCourseUrl(course)
-  const data = {title: 'Font AR', text: `「${course.name}」に挑戦しよう！`, url}
   if (navigator.share) {
     try {
-      await navigator.share(data)
+      await navigator.share({title: 'Font AR', text: `「${course.name}」に挑戦しよう！\n${url}`})
       return
     } catch (error) {
       if (error.name === 'AbortError') {
@@ -29,12 +64,7 @@ export const shareCourse = async (course) => {
       }
     }
   }
-  try {
-    await navigator.clipboard.writeText(url)
-    showToast('コースのURLをコピーしました')
-  } catch (error) {
-    window.prompt('このURLを共有してください', url)
-  }
+  await copyCourseUrl(course)
 }
 
 // The community hub (course lists). Playing and creating happen in the AR view, so those are up to
@@ -95,6 +125,7 @@ export const createCommunityUi = ({onPlay, onCreate, onBack}) => {
       actions.append(button('プレイ', 'primary', () => onPlay(course, activeTab)))
       if (isCreated) {
         actions.append(button('共有', '', () => shareCourse(course)))
+        actions.append(button('URLコピー', '', () => copyCourseUrl(course)))
       }
       actions.append(button('削除', 'danger', () => {
         if (!window.confirm(`「${course.name}」を${isCreated ? '削除' : '履歴から削除'}しますか？`)) {
