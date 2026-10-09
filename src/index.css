@@ -235,7 +235,10 @@ body.mode-menu #contact-status,
 body.mode-menu #timer-status,
 body.mode-hub #ui,
 body.mode-hub #contact-status,
-body.mode-hub #timer-status {
+body.mode-hub #timer-status,
+body.mode-create #contact-status,
+body.mode-create #timer-status,
+body.mode-create #rod-length-row {
   display: none;
 }
 
@@ -452,36 +455,8 @@ body.mode-course #mode-back {
   display: none;
 }
 
-.form label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-}
 
-.form input[type='text'],
-.form select {
-  padding: 12px;
-  border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  color: #1c1c1e;
-  background: #fff;
-}
 
-.create-preview {
-  min-height: 90px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px;
-  border-radius: 12px;
-  font-size: 56px;
-  color: #ff3b30;
-  background: rgba(255, 255, 255, 0.08);
-  overflow-wrap: anywhere;
-  text-align: center;
-}
 
 #toast {
   position: fixed;
@@ -500,5 +475,39 @@ body.mode-course #mode-back {
 
 #toast[hidden] {
   display: none;
+}
+
+/* ---- course creation (in AR) and course play controls ---- */
+#create-panel,
+#course-actions {
+  display: none;
+  margin-top: 8px;
+  pointer-events: auto;
+}
+
+body.mode-create #create-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+body.mode-create #create-panel[hidden] {
+  display: none;
+}
+
+body.mode-course #course-actions {
+  display: block;
+}
+
+#course-name {
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+#create-actions {
+  display: flex;
+  gap: 8px;
 }
 

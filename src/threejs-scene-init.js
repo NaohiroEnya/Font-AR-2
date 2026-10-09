@@ -6,7 +6,7 @@
 // DeviceOrientation-only approach, which can only react to tilt, not real-world position.
 import * as THREE from 'three'
 
-import {createTextMesh, loadFont} from './text-plane'
+import {createTextMesh, loadFont, TEXT_WORLD_HEIGHT} from './text-plane'
 import {createRunRecorder} from './run-recorder'
 
 const PROBE_RADIUS = 0.07 // meters -- thick enough to read clearly on a phone screen
@@ -93,26 +93,41 @@ const createMarker = (color) => {
   return mesh
 }
 
-// Adds start (green) / goal (red) markers as children of `group`, at the local points
-// text-plane.js already worked out (just beyond the text's left/right edge). As children they
-// automatically follow the group's placement, facing, and scale -- no extra transform math
-// needed here, and they're removed along with the text for free when the group is deleted.
-// References are kept on userData so the run-timer logic can find them later without
-// re-traversing children.
-const addStartGoalMarkers = (group) => {
+const clearMarkers = (group) => {
+  ;['startMarker', 'goalMarker'].forEach((key) => {
+    const marker = group.userData[key]
+    if (marker) {
+      group.remove(marker)
+      marker.geometry.dispose()
+      marker.material.dispose()
+      delete group.userData[key]
+    }
+  })
+}
+
+// Adds a start (green) and/or goal (red) marker as children of `group`, at the local points
+// text-plane.js already worked out (just beyond the text's corners). As children they automatically
+// follow the group's placement, facing, and scale -- no extra transform math needed here, and
+// they're removed along with the text for free when the group is deleted. References are kept on
+// userData so the run-timer logic can find them later without re-traversing children.
+const addMarkers = (group, {start = true, goal = true} = {}) => {
+  clearMarkers(group)
   const {startLocal, goalLocal} = group.userData
   if (!startLocal || !goalLocal) {
     return // e.g. blank input, which produced an empty group
   }
-  const start = createMarker(0x2fa36b)
-  start.position.copy(startLocal)
-  group.add(start)
-  group.userData.startMarker = start
-
-  const goal = createMarker(0xe0663d)
-  goal.position.copy(goalLocal)
-  group.add(goal)
-  group.userData.goalMarker = goal
+  if (start) {
+    const marker = createMarker(0x2fa36b)
+    marker.position.copy(startLocal)
+    group.add(marker)
+    group.userData.startMarker = marker
+  }
+  if (goal) {
+    const marker = createMarker(0xe0663d)
+    marker.position.copy(goalLocal)
+    group.add(marker)
+    group.userData.goalMarker = marker
+  }
 }
 
 // True if the rod's current segment [near, far] passes within touching distance of `marker`.
@@ -163,7 +178,7 @@ const createSelectionRing = (group) => {
   return ring
 }
 
-export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
+export const initScenePipelineModule = ({onSelectionChange, onClear, onPlacedChange} = {}) => {
   // Plane used both as the raycast target for tap placement and as a shadow-catcher: it's
   // invisible except where a placed text object blocks the light, so text reads as sitting on
   // the ground rather than floating.
@@ -216,32 +231,165 @@ export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
     }
   }
 
-  // In community mode a fixed course ({text, fontId, scale}) is being played instead of whatever's
-  // typed into the input; sceneEpoch changes whenever the scene is reset, so a text that was still
-  // being built when that happened can tell it's no longer wanted.
+  // What the scene is currently for:
+  //  'single' -- free play: every tap places whatever's in the text input as one text, each with
+  //              its own start and goal.
+  //  'create' -- building a course: every tap places the typed text as separate characters in a row;
+  //              each can then be moved and resized on its own. No run logic, no rod.
+  //  'course' -- playing a saved course: one tap places all of its characters in their saved layout;
+  //              start is on the first character and goal on the last.
+  // sceneEpoch changes whenever the scene is reset, so characters still being built when that
+  // happened can tell they're no longer wanted.
+  let sceneMode = 'single'
   let activeCourse = null
   let sceneEpoch = 0
   let placing = false
+  let layoutYaw = null // the turn (about the vertical axis) a course layout is expressed in
 
-  const placeTextAt = async ({scene, camera}, point) => {
-    const epoch = sceneEpoch
-    const course = activeCourse
-    const group = await createTextMesh(
-      course ? course.text : getInputText(),
-      {fontId: course ? course.fontId : getInputFontId()}
-    )
-    if (epoch !== sceneEpoch) {
-      return
+  // The turn about the vertical axis that makes an upright text on the ground face the camera.
+  // Looking nearly straight down, the camera's forward has no useful horizontal part, so its
+  // "up" (which then points the way the screen's top does) stands in for it.
+  const facingYaw = (camera) => {
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion)
+    let {x, z} = forward
+    if (Math.hypot(x, z) < 0.2) {
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion)
+      x = up.x
+      z = up.z
     }
-    if (course) {
-      group.scale.setScalar(course.scale)
+    return Math.atan2(-x, -z)
+  }
+  const turn = (yaw, x, z) => ({
+    x: x * Math.cos(yaw) + z * Math.sin(yaw),
+    z: -x * Math.sin(yaw) + z * Math.cos(yaw),
+  })
+
+  const notifyPlacedChange = () => {
+    if (onPlacedChange) {
+      onPlacedChange(placedTexts.length)
     }
-    group.position.copy(point)
-    group.quaternion.copy(camera.quaternion) // face the viewer at the moment it's placed
-    addStartGoalMarkers(group)
+  }
+
+  // In a course, start is on the first character and goal on the last (placement order).
+  const assignCourseMarkers = () => {
+    placedTexts.forEach((group, i) => addMarkers(group, {start: i === 0, goal: i === placedTexts.length - 1}))
+  }
+
+  const afterLayoutChange = () => {
+    if (placedTexts.length === 0) {
+      layoutYaw = null
+    }
+    if (sceneMode !== 'single') {
+      assignCourseMarkers()
+    }
+    notifyPlacedChange()
+  }
+
+  const addGroup = (scene, group) => {
     scene.add(group)
     placedTexts.push(group)
     refreshBox(group)
+  }
+
+  // A tap in single mode: one text, facing the camera (pitch included, as it always has).
+  const placeTextAt = async ({scene, camera}, point) => {
+    const epoch = sceneEpoch
+    const group = await createTextMesh(getInputText(), {fontId: getInputFontId()})
+    if (epoch !== sceneEpoch) {
+      return
+    }
+    group.position.copy(point)
+    group.quaternion.copy(camera.quaternion) // face the viewer at the moment it's placed
+    addMarkers(group)
+    addGroup(scene, group)
+  }
+
+  // Builds one upright group per character, in order; characters the font can't draw are dropped.
+  const buildCharGroups = async (chars, fontId) => {
+    const groups = await Promise.all(chars.map((ch) => createTextMesh(ch, {fontId})))
+    return groups
+      .map((group, i) => {
+        group.userData.char = chars[i]
+        group.userData.fontId = fontId
+        return group
+      })
+      .filter((group) => group.children[0])
+  }
+
+  // A tap while creating a course: the typed text becomes separate characters in a row centered on
+  // the tap, all facing the way the first batch did (a later batch lines up with it). Several
+  // characters start smaller so a row of them isn't wider than a room; each can be resized after.
+  const placeCharsAt = async ({scene, camera}, point) => {
+    const epoch = sceneEpoch
+    const chars = Array.from(getInputText()).filter((ch) => ch.trim()).slice(0, 10)
+    const groups = await buildCharGroups(chars, getInputFontId())
+    if (epoch !== sceneEpoch || groups.length === 0) {
+      return
+    }
+    if (layoutYaw === null) {
+      layoutYaw = facingYaw(camera)
+    }
+    const scale = groups.length > 1 ? 0.5 : 1
+    const gap = 0.12 * TEXT_WORLD_HEIGHT * scale
+    const widths = groups.map((group) => {
+      const box = group.children[0].geometry.boundingBox
+      return (box.max.x - box.min.x) * scale
+    })
+    let cursor = -(widths.reduce((sum, w) => sum + w, 0) + gap * (groups.length - 1)) / 2
+    groups.forEach((group, i) => {
+      const offset = turn(layoutYaw, cursor + widths[i] / 2, 0)
+      cursor += widths[i] + gap
+      group.scale.setScalar(scale)
+      group.rotation.y = layoutYaw
+      group.position.set(point.x + offset.x, point.y, point.z + offset.z)
+      addGroup(scene, group)
+    })
+    afterLayoutChange()
+  }
+
+  // A tap while playing a course: every character goes down in its saved spot and size, with the
+  // whole layout turned to face the player.
+  const placeCourseAt = async ({scene, camera}, point) => {
+    const epoch = sceneEpoch
+    const course = activeCourse
+    const groups = await Promise.all(course.chars.map((c) => createTextMesh(c.ch, {fontId: course.fontId})))
+    if (epoch !== sceneEpoch) {
+      return
+    }
+    const yaw = facingYaw(camera)
+    groups.forEach((group, i) => {
+      if (!group.children[0]) {
+        return // a character this font can't draw
+      }
+      const {ch, x, z, s} = course.chars[i]
+      const offset = turn(yaw, x, z)
+      group.userData.char = ch
+      group.scale.setScalar(s)
+      group.rotation.y = yaw
+      group.position.set(point.x + offset.x, point.y, point.z + offset.z)
+      addGroup(scene, group)
+    })
+    afterLayoutChange()
+  }
+
+  // What's been laid out while creating a course, ready to save: positions relative to the
+  // layout's center, in the frame it was built in (so it can be re-placed facing a player).
+  const getCourseLayout = () => {
+    if (placedTexts.length === 0 || layoutYaw === null) {
+      return null
+    }
+    const cx = placedTexts.reduce((sum, g) => sum + g.position.x, 0) / placedTexts.length
+    const cz = placedTexts.reduce((sum, g) => sum + g.position.z, 0) / placedTexts.length
+    const cos = Math.cos(layoutYaw)
+    const sin = Math.sin(layoutYaw)
+    return {
+      fontId: placedTexts[0].userData.fontId,
+      chars: placedTexts.map((g) => {
+        const dx = g.position.x - cx
+        const dz = g.position.z - cz
+        return {ch: g.userData.char, x: dx * cos - dz * sin, z: dx * sin + dz * cos, s: g.scale.x}
+      }),
+    }
   }
 
   const removeText = (scene, group) => {
@@ -249,6 +397,7 @@ export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
     placedTexts.splice(placedTexts.indexOf(group), 1)
     textBoxes.delete(group)
     textInverses.delete(group)
+    afterLayoutChange()
   }
 
   const deselect = () => {
@@ -286,7 +435,7 @@ export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
   }
 
   const setSelectedScale = (scale) => {
-    if (!selectedGroup || activeCourse) { // a course's size is part of the course
+    if (!selectedGroup || sceneMode === 'course') { // a played course's sizes are fixed
       return
     }
     selectedGroup.scale.setScalar(scale)
@@ -562,7 +711,7 @@ export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
       finalElapsedMs = performance.now() - runStartedAt
       clearTimeEl.textContent = formatSeconds(finalElapsedMs)
       // In community mode the caller records the time and can hand back a line to show under it.
-      clearBestEl.textContent = (activeCourse && onClear && onClear({course: activeCourse, elapsedMs: finalElapsedMs})) || ''
+      clearBestEl.textContent = (sceneMode === 'course' && onClear && onClear({course: activeCourse, elapsedMs: finalElapsedMs})) || ''
       clearOverlayEl.hidden = false
       justCleared = true
     } else if (runState === 'running' && !safe) {
@@ -616,6 +765,7 @@ export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
   // recording. Used whenever the player moves between modes/screens.
   const resetScene = () => {
     sceneEpoch += 1
+    layoutYaw = null
     deselect()
     if (liveScene) {
       ;[...placedTexts].forEach((group) => removeText(liveScene, group))
@@ -629,16 +779,26 @@ export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
     setTimerText('スタートに触れて計測開始', null)
   }
 
-  // Starts (or, with null, stops) playing a fixed course. Comparable times need the same rod for
-  // everyone, so a course always uses the default rod length.
-  const setCourse = (course) => {
+  const setSceneMode = (mode, course = null) => {
     resetScene()
+    sceneMode = mode
     activeCourse = course
+    layoutYaw = null
+    probeRod.visible = mode !== 'create' // no rod while laying a course out
+    if (mode !== 'single') {
+      setRodLength(PROBE_LENGTH) // comparable times need the same rod for everyone
+    }
+  }
+
+  // Starts (or, with null, stops) playing a fixed course.
+  const setCourse = (course) => {
+    setSceneMode(course ? 'course' : 'single', course)
     if (course) {
-      setRodLength(PROBE_LENGTH)
       loadFont(course.fontId)
     }
   }
+
+  const startCreate = () => setSceneMode('create')
 
   const pipelineModule = {
     name: 'textplacement',
@@ -675,6 +835,9 @@ export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
         // places a new text using whatever's currently in the text input.
         const [textHit] = raycaster.intersectObjects(placedTexts, true)
         if (textHit) {
+          if (sceneMode === 'course') {
+            return // a played course can't be picked up or resized
+          }
           const hitGroup = textHit.object.parent
           if (hitGroup === selectedGroup) {
             dragTouchId = touch.identifier
@@ -689,15 +852,16 @@ export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
           return
         }
 
-        // A course is a single text; a second one only after the first is deleted.
-        if (placing || (activeCourse && placedTexts.length > 0)) {
+        // A played course is placed once; "re-place" clears it to try another spot.
+        if (placing || (sceneMode === 'course' && placedTexts.length > 0)) {
           return
         }
         const [groundHit] = raycaster.intersectObject(ground)
         if (groundHit) {
           placing = true
           try {
-            await placeTextAt({scene, camera}, groundHit.point)
+            const place = {single: placeTextAt, create: placeCharsAt, course: placeCourseAt}[sceneMode]
+            await place({scene, camera}, groundHit.point)
           } finally {
             placing = false
           }
@@ -738,6 +902,9 @@ export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
       if (!liveCamera) {
         return
       }
+      if (sceneMode === 'create') {
+        return // laying a course out: nothing to judge
+      }
       probeRod.position.copy(liveCamera.position)
       probeRod.quaternion.copy(liveCamera.quaternion)
       updateRodSegment(liveCamera)
@@ -758,5 +925,8 @@ export const initScenePipelineModule = ({onSelectionChange, onClear} = {}) => {
     }
   }
 
-  return {pipelineModule, setSelectedScale, setRodLength, deleteSelected, deselect, resetScene, setCourse}
+  return {
+    pipelineModule, setSelectedScale, setRodLength, deleteSelected, deselect, resetScene,
+    setCourse, startCreate, getCourseLayout,
+  }
 }

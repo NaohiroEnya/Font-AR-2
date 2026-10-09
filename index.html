@@ -39,10 +39,23 @@
         </div>
       </div>
 
+      <div id="create-panel">
+        <input id="course-name" type="text" maxlength="20" placeholder="コース名（省略すると文字が名前になります）">
+        <div id="create-actions">
+          <button id="create-save" type="button" class="panel-button">コースを保存</button>
+          <button id="create-clear" type="button" class="panel-button">全部消す</button>
+          <button id="create-cancel" type="button" class="panel-button panel-button-danger">キャンセル</button>
+        </div>
+      </div>
+
+      <div id="course-actions">
+        <button id="course-replace" type="button" class="panel-button">置き直す</button>
+      </div>
+
       <div id="selection-panel" hidden>
         <div id="selection-size-row">
           <span>サイズ</span>
-          <input id="selection-size" type="range" min="0.5" max="2.5" step="0.05" value="1" aria-label="選択中の文字のサイズ">
+          <input id="selection-size" type="range" min="0.25" max="2.5" step="0.05" value="1" aria-label="選択中の文字のサイズ">
         </div>
         <div id="selection-actions">
           <button id="selection-delete" type="button" class="panel-button panel-button-danger">この文字を削除</button>
@@ -91,29 +104,6 @@
         <button id="hub-new" class="primary-button" type="button">＋ 新規作成</button>
         <ul id="course-list" class="course-list"></ul>
         <p id="course-empty" class="course-empty" hidden></p>
-      </div>
-    </div>
-
-    <div id="create-screen" class="screen" hidden>
-      <div class="screen-header">
-        <button id="create-cancel" class="back-button inline" type="button">← キャンセル</button>
-        <h2>新規コース</h2>
-      </div>
-      <div class="screen-body form">
-        <label>コース名（空なら文字がそのまま名前になります）
-          <input id="create-name" type="text" placeholder="例: むずかしい漢字">
-        </label>
-        <label>文字
-          <input id="create-text" type="text" placeholder="例: 回">
-        </label>
-        <label>フォント
-          <select id="create-font"></select>
-        </label>
-        <label>サイズ <output id="create-scale-value">×1</output>
-          <input id="create-scale" type="range" value="1">
-        </label>
-        <div id="create-preview" class="create-preview" aria-label="プレビュー">文字</div>
-        <button id="create-save" class="primary-button" type="button">保存</button>
       </div>
     </div>
 

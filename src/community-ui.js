@@ -1,9 +1,6 @@
-import {
-  MAX_TEXT_LENGTH, MAX_NAME_LENGTH, SCALE_MIN, SCALE_MAX, SCALE_STEP,
-  normalizeCourse, buildCourseUrl,
-} from './course'
-import {listCreated, addCreated, removeCreated, listPlayed, removePlayed, getBest} from './course-store'
-import {populateFontSelect, ensurePreviewFont, fontLabel} from './font-select'
+import {buildCourseUrl, courseText} from './course'
+import {listCreated, removeCreated, listPlayed, removePlayed, getBest} from './course-store'
+import {fontLabel} from './font-select'
 
 const $ = (id) => document.getElementById(id)
 
@@ -40,11 +37,11 @@ export const shareCourse = async (course) => {
   }
 }
 
-// The community hub (course lists) and the course editor. Playing a course is up to the caller:
-// `onPlay(course)` is called when one is chosen, `onBack()` to return to the mode menu.
-export const createCommunityUi = ({onPlay, onBack}) => {
+// The community hub (course lists). Playing and creating happen in the AR view, so those are up to
+// the caller: `onPlay(course, tab)` when a course is chosen, `onCreate()` for "new course", and
+// `onBack()` to return to the mode menu.
+export const createCommunityUi = ({onPlay, onCreate, onBack}) => {
   const hubScreen = $('hub-screen')
-  const createScreen = $('create-screen')
   const tabs = {created: $('tab-created'), played: $('tab-played')}
   const list = $('course-list')
   const empty = $('course-empty')
@@ -86,9 +83,9 @@ export const createCommunityUi = ({onPlay, onBack}) => {
       meta.className = 'course-meta'
       const best = getBest(course)
       meta.textContent = [
-        `「${course.text}」`,
+        `「${courseText(course)}」`,
         fontLabel(course.fontId),
-        `×${course.scale}`,
+        `${course.chars.length}文字`,
         best ? `自己ベスト ${formatSeconds(best)}` : '未クリア',
       ].join(' ・ ')
       main.append(title, meta)
@@ -118,14 +115,12 @@ export const createCommunityUi = ({onPlay, onBack}) => {
 
   const showHub = (tab = activeTab) => {
     activeTab = tab
-    createScreen.hidden = true
     hubScreen.hidden = false
     renderList()
   }
 
   const hide = () => {
     hubScreen.hidden = true
-    createScreen.hidden = true
   }
 
   Object.entries(tabs).forEach(([name, el]) => el.addEventListener('click', () => {
@@ -134,55 +129,7 @@ export const createCommunityUi = ({onPlay, onBack}) => {
   }))
   $('hub-back').addEventListener('click', onBack)
 
-  // ---- course editor
-  const nameInput = $('create-name')
-  const textInput = $('create-text')
-  const fontSelect = $('create-font')
-  const scaleInput = $('create-scale')
-  const scaleValue = $('create-scale-value')
-  const preview = $('create-preview')
-  nameInput.maxLength = MAX_NAME_LENGTH
-  textInput.maxLength = MAX_TEXT_LENGTH
-  scaleInput.min = SCALE_MIN
-  scaleInput.max = SCALE_MAX
-  scaleInput.step = SCALE_STEP
-  populateFontSelect(fontSelect)
-
-  const updatePreview = () => {
-    scaleValue.textContent = `×${scaleInput.value}`
-    preview.textContent = textInput.value.trim() || '文字'
-    const fontId = fontSelect.value
-    ensurePreviewFont(fontId).then((family) => {
-      if (fontSelect.value === fontId) {
-        preview.style.fontFamily = `"${family}", sans-serif`
-      }
-    })
-  }
-  ;[textInput, fontSelect, scaleInput].forEach((el) => el.addEventListener('input', updatePreview))
-
-  const showCreate = () => {
-    nameInput.value = ''
-    textInput.value = ''
-    fontSelect.selectedIndex = 0
-    scaleInput.value = '1'
-    hubScreen.hidden = true
-    createScreen.hidden = false
-    updatePreview()
-    textInput.focus()
-  }
-
-  $('hub-new').addEventListener('click', showCreate)
-  $('create-cancel').addEventListener('click', () => showHub('created'))
-  $('create-save').addEventListener('click', () => {
-    const course = normalizeCourse({t: textInput.value, f: fontSelect.value, s: scaleInput.value, n: nameInput.value})
-    if (!course) {
-      showToast('文字を入力してください')
-      return
-    }
-    addCreated(course)
-    showHub('created')
-    showToast('コースを保存しました。「共有」でURLを送れます')
-  })
+  $('hub-new').addEventListener('click', onCreate)
 
   return {showHub, hide}
 }

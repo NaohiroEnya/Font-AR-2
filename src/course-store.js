@@ -1,11 +1,13 @@
-import {normalizeCourse, courseKey} from './course'
+import {normalizeCourse, courseKey, toRaw} from './course'
 
 // Courses and times live in this browser only (localStorage) for now. Every read re-validates what
 // it finds, since anything in storage could have been edited by hand.
+// (v2: courses became per-character layouts; courses saved in the earlier single-text format
+// aren't carried over.)
 const KEYS = {
-  created: 'fontar.created.v1',
-  played: 'fontar.played.v1',
-  best: 'fontar.best.v1',
+  created: 'fontar.created.v2',
+  played: 'fontar.played.v2',
+  best: 'fontar.best.v2',
 }
 
 const read = (key, fallback) => {
@@ -27,23 +29,25 @@ const write = (key, value) => {
 const readCourses = (key) =>
   read(key, [])
     .map((entry) => {
-      const course = normalizeCourse({t: entry.text, f: entry.fontId, s: entry.scale, n: entry.name})
+      const course = normalizeCourse(entry)
       return course && {...course, id: String(entry.id || ''), at: Number(entry.at) || 0}
     })
     .filter(Boolean)
 
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
 
+const stored = (course) => ({...toRaw(course), id: course.id, at: course.at})
+
 export const listCreated = () => readCourses(KEYS.created).sort((a, b) => b.at - a.at)
 
 export const addCreated = (course) => {
   const entry = {...course, id: newId(), at: Date.now()}
-  write(KEYS.created, [entry, ...readCourses(KEYS.created)])
+  write(KEYS.created, [{...toRaw(entry), id: entry.id, at: entry.at}, ...readCourses(KEYS.created).map(stored)])
   return entry
 }
 
 export const removeCreated = (id) => {
-  write(KEYS.created, readCourses(KEYS.created).filter((c) => c.id !== id))
+  write(KEYS.created, readCourses(KEYS.created).filter((c) => c.id !== id).map(stored))
 }
 
 export const listPlayed = () => readCourses(KEYS.played).sort((a, b) => b.at - a.at)
@@ -56,17 +60,17 @@ export const notePlayed = (course) => {
     return
   }
   const others = readCourses(KEYS.played).filter((c) => courseKey(c) !== key)
-  write(KEYS.played, [{...course, id: key, at: Date.now()}, ...others])
+  write(KEYS.played, [stored({...course, id: key, at: Date.now()}), ...others.map(stored)])
 }
 
 export const removePlayed = (course) => {
   const key = courseKey(course)
-  write(KEYS.played, readCourses(KEYS.played).filter((c) => courseKey(c) !== key))
+  write(KEYS.played, readCourses(KEYS.played).filter((c) => courseKey(c) !== key).map(stored))
 }
 
 const readBest = () => {
-  const stored = read(KEYS.best, {})
-  return stored && typeof stored === 'object' ? stored : {}
+  const saved = read(KEYS.best, {})
+  return saved && typeof saved === 'object' ? saved : {}
 }
 
 export const getBest = (course) => {

@@ -1,39 +1,68 @@
 import {FONTS, DEFAULT_FONT_ID} from './text-plane'
 
-export const MAX_TEXT_LENGTH = 10
+export const MAX_CHARS = 10
 export const MAX_NAME_LENGTH = 20
-export const SCALE_MIN = 0.5
-export const SCALE_MAX = 2
-export const SCALE_STEP = 0.25
+export const SCALE_MIN = 0.25
+export const SCALE_MAX = 2.5
+export const POSITION_LIMIT = 100 // meters from the course's origin; just a sanity bound
+const STEP = 0.05 // positions and sizes are kept to this grid, so a course re-encodes identically
 
-// A course is just what's needed to rebuild it: the text, the font, and the size. Where it's
-// placed in the room isn't part of it (SLAM coordinates don't carry over between sessions), and
-// the start/goal positions follow from the text itself, so a course fits in a URL.
+// A course is a font plus a list of single characters, each with its own size and its position
+// relative to the course's origin. x is to the right and z toward the player, in the frame the
+// course was laid out in (so it can be re-placed facing whoever is playing it). Where the course
+// sits in the room isn't part of it -- SLAM coordinates don't carry over between sessions -- and
+// start/goal follow from the first/last character, so a course fits in a URL.
 //
 // Everything here is treated as untrusted input (it can come straight out of a shared link): the
-// text is clamped to the allowed length, the font must be one we ship, the size is snapped to a
-// step, and the result is only ever put on screen via textContent.
+// character list is length-clamped, numbers are bounded and snapped, the font must be one we ship,
+// and the result is only ever put on screen via textContent.
+const snap = (value, min, max, fallback) => {
+  const n = Number(value)
+  const v = Number.isFinite(n) ? n : fallback
+  return Number((Math.round(Math.min(max, Math.max(min, v)) / STEP) * STEP).toFixed(2))
+}
+
 export const normalizeCourse = (raw) => {
-  if (!raw || typeof raw !== 'object') {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.c)) {
     return null
   }
-  const text = Array.from(String(raw.t ?? '').trim()).slice(0, MAX_TEXT_LENGTH).join('')
-  if (!text) {
+  const chars = []
+  raw.c.forEach((entry) => {
+    if (!Array.isArray(entry) || chars.length >= MAX_CHARS) {
+      return
+    }
+    const ch = Array.from(String(entry[0] ?? ''))[0]
+    if (!ch || !ch.trim()) {
+      return
+    }
+    chars.push({
+      ch,
+      x: snap(entry[1], -POSITION_LIMIT, POSITION_LIMIT, 0),
+      z: snap(entry[2], -POSITION_LIMIT, POSITION_LIMIT, 0),
+      s: snap(entry[3], SCALE_MIN, SCALE_MAX, 1),
+    })
+  })
+  if (chars.length === 0) {
     return null
   }
   const fontId = FONTS.some((f) => f.id === raw.f) ? raw.f : DEFAULT_FONT_ID
-  let scale = Number(raw.s)
-  if (!Number.isFinite(scale)) {
-    scale = 1
-  }
-  scale = Math.min(SCALE_MAX, Math.max(SCALE_MIN, Math.round(scale / SCALE_STEP) * SCALE_STEP))
-  const name = Array.from(String(raw.n ?? '').trim()).slice(0, MAX_NAME_LENGTH).join('') || text
-  return {text, fontId, scale, name}
+  const name = Array.from(String(raw.n ?? '').trim()).slice(0, MAX_NAME_LENGTH).join('') || chars.map((c) => c.ch).join('')
+  return {name, fontId, chars}
 }
 
-// Identity of a course for records: the same text, font, and size is the same course no matter who
-// made it or what they called it.
-export const courseKey = (course) => `${course.fontId}:${course.scale}:${course.text}`
+// The compact form used in URLs and in storage.
+export const toRaw = (course) => ({
+  n: course.name,
+  f: course.fontId,
+  c: course.chars.map((c) => [c.ch, c.x, c.z, c.s]),
+})
+
+export const courseText = (course) => course.chars.map((c) => c.ch).join('')
+
+// Identity of a course for records: the same font and layout is the same course no matter who made
+// it or what they called it.
+export const courseKey = (course) =>
+  `${course.fontId}:${course.chars.map((c) => `${c.ch}@${c.x},${c.z}x${c.s}`).join('|')}`
 
 const toBase64Url = (bytes) => {
   let binary = ''
@@ -47,11 +76,12 @@ const fromBase64Url = (value) => {
 }
 
 export const encodeCourse = (course) =>
-  toBase64Url(new TextEncoder().encode(JSON.stringify({v: 1, t: course.text, f: course.fontId, s: course.scale, n: course.name})))
+  toBase64Url(new TextEncoder().encode(JSON.stringify({v: 2, ...toRaw(course)})))
 
 export const decodeCourse = (encoded) => {
   try {
-    return normalizeCourse(JSON.parse(new TextDecoder().decode(fromBase64Url(encoded))))
+    const raw = JSON.parse(new TextDecoder().decode(fromBase64Url(encoded)))
+    return raw && raw.v === 2 ? normalizeCourse(raw) : null
   } catch (error) {
     return null
   }
